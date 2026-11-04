@@ -14,7 +14,7 @@ return view.extend({
   link.value = saved.link || '';
   var section = E('select', { 'class': 'cbi-input-select' });
   uci.sections('forkop', 'section', function(s) {
-   if (s.action === 'connection') section.appendChild(E('option', { 'value': s['.name'] }, [s.name || s['.name']]));
+   if (s.action === 'connection') section.appendChild(E('option', { 'value': s['.name'] }, [s.label || s.name || s['.name']]));
   });
   if (saved.section) section.value = saved.section;
   var interval = E('select', { 'class': 'cbi-input-select' }, ['30m', '1h', '6h', '12h', '1d'].map(function(v) { return E('option', { 'value': v }, [v]); }));
