@@ -1,0 +1,8 @@
+{
+ "admin/services/happ-forkop": {
+  "title": "Happ → Forkop",
+  "order": 65,
+  "action": { "type": "view", "path": "happ-forkop" },
+  "depends": { "acl": ["luci-app-happ-forkop"] }
+ }
+}
