@@ -1,0 +1,17 @@
+{
+ "luci-app-happ-forkop": {
+  "description": "Import Happ subscription into Forkop",
+  "read": {
+   "uci": ["forkop"],
+   "ubus": { "file": ["read"] },
+   "file": { "/etc/happ-forkop/settings.json": ["read"] }
+  },
+  "write": {
+   "ubus": { "file": ["write", "exec"] },
+   "file": {
+    "/etc/happ-forkop/settings.json": ["write"],
+    "/usr/libexec/happ-forkop": ["exec"]
+   }
+  }
+ }
+}
