@@ -23,7 +23,7 @@ class ReleaseTests(unittest.TestCase):
     def test_headers_large_stdout_and_json_conversion(self):
         observed = {}
         uuid = '00000000-0000-4000-8000-000000000001'
-        outbounds = [{'protocol': 'vless', 'tag': 'Server'+str(i), 'settings': {'vnext': [{'address': 'example.com', 'port': 443, 'users': [{'id': uuid, 'encryption': 'none'}]}]}, 'streamSettings': {'network': 'tcp', 'security': 'tls', 'tlsSettings': {'serverName': 'example.com'}}} for i in range(350)]
+        outbounds = [{'protocol': 'vless', 'tag': 'Server'+str(i), 'settings': {'vnext': [{'address': 'example.com', 'port': 10000+i, 'users': [{'id': uuid, 'encryption': 'none'}]}]}, 'streamSettings': {'network': 'tcp', 'security': 'tls', 'tlsSettings': {'serverName': 'example.com'}}} for i in range(350)]
         # Exact duplicate + non-proxy sections must not pollute the URI file.
         body = json.dumps({'outbounds': outbounds+[outbounds[0], {'protocol': 'freedom', 'tag': 'direct'}], 'routing': {'rules': []}}).encode()
 
