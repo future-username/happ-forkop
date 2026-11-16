@@ -1,10 +1,22 @@
 #!/bin/sh
-# Imports one Happ subscription into Forkop 2.x; Forkop owns subsequent refreshes.
+# Import a subscription; native Forkop refresh or optional hpwnr + cron mode.
 set -eu
 umask 077
 export LC_ALL=C
-fail() { printf '%s\n' "$1"; exit 1; }
+fail() {
+ printf '%s\n' "$1"
+ if [ "${refresh:-0}" = 1 ]; then logger -t happ-forkop "$1" 2>/dev/null || :; fi
+ exit 1
+}
 settings=/etc/happ-forkop/settings.json
+active=/etc/happ-forkop/active.json
+profile=/etc/happ-forkop/subscription.txt
+refresh=0
+case "${1:-import}" in
+ import) [ "$#" -le 1 ] || fail 'Неизвестные аргументы.' ;;
+ refresh) [ "$#" = 1 ] || fail 'Неизвестные аргументы.'; settings=$active; refresh=1 ;;
+ *) fail 'Неизвестная команда.' ;;
+esac
 lock=/var/lock/happ-forkop.lock
 mkdir "$lock" 2>/dev/null || fail 'Импорт уже выполняется.'
 tmp=''
@@ -13,12 +25,21 @@ trap 'exit 1' HUP INT TERM
 [ -x /usr/bin/hpwnr ] || fail 'Не установлен hpwnr.'
 [ -f "$settings" ] || fail 'Сначала заполните форму.'
 chmod 600 "$settings"
+# Work from a stable copy while LuCI may save the form again.
+tmp=$(mktemp -d /tmp/happ-forkop.XXXXXX)
+cp "$settings" "$tmp/settings.json"
+settings=$tmp/settings.json
 get() { jsonfilter -i "$settings" -e "@.$1" 2>/dev/null; }
 link=$(get link) || fail 'Не удалось прочитать ссылку.'
 owner=$(get section) || fail 'Выберите секцию Forkop.'
 interval=$(get interval) || interval=1h
 hwid=$(get hwid) || hwid=''
-case "$link" in happ://crypt*/*) ;; *) fail 'Нужна ссылка happ://crypt…/…' ;; esac
+mode=$(get mode) || mode=native
+case "$mode" in native|hpwnr) ;; *) fail 'Некорректный режим загрузки.' ;; esac
+case "$link" in
+ happ://crypt*/*|happ://add/*|v2raytun://crypt/*|v2raytun://import/*|incy://add/*|incy://import/*|https://?*) ;;
+ *) fail 'Нужна ссылка Happ, v2RayTun, INCY или HTTPS.' ;;
+esac
 [ "${#link}" -le 32768 ] || fail 'Ссылка слишком длинная.'
 case "$owner" in ''|*[!a-zA-Z0-9_]*) fail 'Некорректная секция.' ;; esac
 case "$interval" in 30m|1h|6h|12h|1d) ;; *) fail 'Некорректный интервал.' ;; esac
@@ -27,17 +48,75 @@ case "$interval" in 30m|1h|6h|12h|1d) ;; *) fail 'Некорректный ин�
 [ "$(uci -q get "forkop.$owner.action")" = connection ] || fail 'Выберите секцию с действием «Подключение».'
 [ -z "$(uci changes forkop)" ] || fail 'Сначала примените несохранённые изменения Forkop.'
 case "$hwid" in *[!a-zA-Z0-9_.:-]*) fail 'Недопустимые символы HWID.' ;; esac
-if [ -z "$hwid" ]; then
- mac=$(cat /sys/class/net/eth0/address 2>/dev/null || cat /sys/class/net/br-lan/address 2>/dev/null || :)
- model=$(cat /tmp/sysinfo/model 2>/dev/null || printf 'OpenWrt Router')
- hash=$(printf '%s' "$mac-$model" | md5sum | cut -c1-16)
- hwid=$(printf '%s' "$hash" | sed 's/\(....\)\(....\)\(....\)\(....\)/\1-\2-\3-\4/')
-fi
-# Do not forward decoder diagnostics: they may contain credentials.
-url=$(/usr/bin/hpwnr "$link" 2>/dev/null) || fail 'Не удалось расшифровать ссылку. Возможно, нужны новые ключи hpwnr.'
+# Let Forkop identify the installed core so the provider returns its compatible
+# subscription template, rather than the Happ app's template.
+defaults=$(/usr/bin/forkop get_subscription_default_headers 2>/dev/null) || fail 'Не удалось получить заголовки Forkop. Обновите Forkop и повторите импорт.'
+headers=$(jsonfilter -s "$defaults" -e '@[*]' 2>/dev/null) || fail 'Forkop вернул некорректные заголовки.'
+[ -n "$headers" ] || fail 'Forkop вернул пустой список заголовков.'
+# A bare HTTPS argument encrypts in hpwnr, so pass it through explicitly.
+case "$link" in
+ https://*) url=$link ;;
+ *) url=$(/usr/bin/hpwnr "$link" 2>/dev/null) || fail 'Не удалось расшифровать ссылку. Возможно, нужны новые ключи hpwnr.' ;;
+esac
 case "$url" in https://?*) ;; *) fail 'После расшифровки не получен HTTPS-адрес подписки.' ;; esac
 case "$url" in *[[:space:]]*) fail 'Адрес подписки содержит пробелы или переносы строк.' ;; esac
-tmp=$(mktemp -d /tmp/happ-forkop.XXXXXX)
+if [ "$refresh" = 1 ]; then
+ [ "$mode" = hpwnr ] || fail 'Автообновление hpwnr отключено.'
+ [ "$(uci -q get forkop.happ_bridge.happ_bridge_managed)" = 1 ] &&
+ [ "$(uci -q get forkop.happ_bridge.url)" = "$profile" ] &&
+ [ "$(uci -q get forkop.happ_bridge.section)" = "$owner" ] || fail 'Подписка изменена в Forkop. Повторите импорт.'
+fi
+
+fetch_profile() {
+ command -v timeout >/dev/null || fail 'Для загрузки через hpwnr нужна команда timeout.'
+ # Never use eval: each header name and value remains one argv element.
+ set -- "$url" fetch sb uri stdout
+ printf '%s\n' "$headers" > "$tmp/headers"
+ while IFS= read -r header; do
+  case "$header" in
+   X-HWID:*) [ -z "$hwid" ] || continue ;;
+  esac
+  name=${header%%:*}
+  value=${header#*:}
+  value=${value# }
+  set -- "$@" header "$name" "$value"
+ done < "$tmp/headers"
+ [ -z "$hwid" ] || set -- "$@" header X-HWID "$hwid"
+ # stdout is essential: otherwise results over 15000 bytes go to a side file.
+ (cd "$tmp"; timeout 20 /usr/bin/hpwnr "$@") > "$tmp/fetched" 2>/dev/null || fail 'Не удалось загрузить подписку через hpwnr. Проверьте доступ, HWID и срок подписки; прежний список сохранён.'
+ tr -d '\r' < "$tmp/fetched" > "$tmp/profile"
+ [ -s "$tmp/profile" ] || fail 'hpwnr вернул пустой список. Прежний список сохранён.'
+ count=0
+ while IFS= read -r line || [ -n "$line" ]; do
+  case "$line" in
+   '') continue ;;
+   vless://?*|vmess://?*|trojan://?*|hy2://?*|hysteria2://?*|ss://?*|tuic://?*) count=$((count + 1)) ;;
+   *) fail 'hpwnr вернул неподдерживаемый формат. Прежний список сохранён.' ;;
+  esac
+ done < "$tmp/profile"
+ [ "$count" -gt 0 ] || fail 'В подписке нет поддерживаемых серверов.'
+}
+
+publish_profile() {
+ cp "$tmp/profile" /etc/happ-forkop/.subscription.new
+ chmod 600 /etc/happ-forkop/.subscription.new
+ mv /etc/happ-forkop/.subscription.new "$profile"
+}
+
+if [ "$mode" = hpwnr ]; then
+ command -v crontab >/dev/null && [ -x /etc/init.d/cron ] || fail 'Для автообновления hpwnr нужны crontab и служба cron.'
+ fetch_profile
+ if [ "$refresh" = 1 ]; then
+  if cmp -s "$tmp/profile" "$profile"; then
+   printf '%s\n' 'Изменений в подписке нет.'
+   exit 0
+  fi
+  publish_profile
+  /etc/init.d/forkop reload >/dev/null 2>&1 || { printf '%s\n' 'Список обновлён, но Forkop не применил изменения.'; exit 2; }
+  printf '%s\n' 'Список обновлён через hpwnr. Запрос на применение отправлен.'
+  exit 0
+ fi
+fi
 mkdir "$tmp/delta"
 cp /etc/config/forkop "$tmp/forkop"
 before=$(sha256sum /etc/config/forkop)
@@ -46,27 +125,67 @@ id=happ_bridge
 existing=$(u -q get "forkop.$id" || :)
 if [ -n "$existing" ]; then
  [ "$existing" = subscription_url ] && [ "$(u -q get "forkop.$id.happ_bridge_managed")" = 1 ] || fail 'Имя happ_bridge занято другой настройкой.'
- u delete "forkop.$id"
+ # Keep filters, overrides and the download route configured by the user.
 fi
 u set "forkop.$id=subscription_url"
 u set "forkop.$id.section=$owner"
-u set "forkop.$id.url=$url"
+if [ "$mode" = hpwnr ]; then
+ u set "forkop.$id.url=$profile"
+else
+ u set "forkop.$id.url=$url"
+fi
 u set "forkop.$id.tag=Happ"
 u set "forkop.$id.happ_bridge_managed=1"
 u set "forkop.$id.subscription_update_enabled=1"
 u set "forkop.$id.subscription_update_interval=$interval"
-u add_list "forkop.$id.header=User-Agent: Happ/4.6.0"
+u -q delete "forkop.$id.header" 2>/dev/null || :
+printf '%s\n' "$headers" | while IFS= read -r header; do
+ case "$header" in
+  X-HWID:*) [ -z "$hwid" ] || continue ;;
+ esac
+ u add_list "forkop.$id.header=$header"
+done
 [ -z "$hwid" ] || u add_list "forkop.$id.header=X-HWID: $hwid"
 u commit forkop
 [ "$before" = "$(sha256sum /etc/config/forkop)" ] && [ -z "$(uci changes forkop)" ] || fail 'Настройки Forkop изменились во время импорта. Повторите.'
 cp /etc/config/forkop /etc/happ-forkop/forkop.before-import
 chmod 600 /etc/happ-forkop/forkop.before-import
+if [ "$mode" = hpwnr ]; then publish_profile; fi
 # Stage on the same filesystem so replacing the configuration is atomic.
 cp "$tmp/forkop" /etc/config/.forkop-happ-new
 chmod 600 /etc/config/.forkop-happ-new
 mv /etc/config/.forkop-happ-new /etc/config/forkop
+# Only successfully imported settings drive the scheduler, not pending LuCI edits.
+cp "$settings" /etc/happ-forkop/.active.new
+chmod 600 /etc/happ-forkop/.active.new
+mv /etc/happ-forkop/.active.new "$active"
+if command -v crontab >/dev/null; then
+ # Keep unrelated entries; replace only our exact marked scheduler line.
+ crontab -l > "$tmp/cron.old" 2>/dev/null || :
+ sed '\| /usr/libexec/happ-forkop refresh >/dev/null 2>&1 # happ-forkop$|d' "$tmp/cron.old" > "$tmp/cron.new"
+ if [ "$mode" = hpwnr ]; then
+  case "$interval" in
+   30m) schedule='*/30 * * * *' ;;
+   1h) schedule='0 * * * *' ;;
+   6h) schedule='0 */6 * * *' ;;
+   12h) schedule='0 */12 * * *' ;;
+   1d) schedule='0 0 * * *' ;;
+  esac
+  printf '%s /usr/libexec/happ-forkop refresh >/dev/null 2>&1 # happ-forkop\n' "$schedule" >> "$tmp/cron.new"
+ fi
+ if ! cmp -s "$tmp/cron.old" "$tmp/cron.new"; then
+  crontab "$tmp/cron.new" || { printf '%s\n' 'Подписка записана, но расписание не установлено. Повторите импорт.'; exit 2; }
+ fi
+ if [ "$mode" = hpwnr ]; then
+  /etc/init.d/cron enable >/dev/null 2>&1 && /etc/init.d/cron start >/dev/null 2>&1 || { printf '%s\n' 'Подписка записана, но cron не запущен. Проверьте службу cron.'; exit 2; }
+ fi
+fi
 if ! /etc/init.d/forkop reload >/dev/null 2>&1; then
  printf '%s\n' 'Подписка записана, но Forkop не смог применить настройки. Проверьте диагностику Forkop.'
  exit 2
 fi
-printf '%s\n' 'Подписка добавлена. Автообновление включено. Проверьте серверы в Forkop.'
+if [ "$mode" = hpwnr ]; then
+ printf '%s\n' 'Подписка загружена через hpwnr, автообновление через cron включено. Проверьте доступность серверов в Forkop.'
+else
+ printf '%s\n' 'Настройки подписки записаны, запрос на применение отправлен. Автообновление Forkop включено. Загрузка подписки и доступность серверов ещё не подтверждены: проверьте Дашборд и Логи Forkop.'
+fi
