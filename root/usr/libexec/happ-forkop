@@ -27,12 +27,11 @@ case "$interval" in 30m|1h|6h|12h|1d) ;; *) fail 'Некорректный ин�
 [ "$(uci -q get "forkop.$owner.action")" = connection ] || fail 'Выберите секцию с действием «Подключение».'
 [ -z "$(uci changes forkop)" ] || fail 'Сначала примените несохранённые изменения Forkop.'
 case "$hwid" in *[!a-zA-Z0-9_.:-]*) fail 'Недопустимые символы HWID.' ;; esac
-if [ -z "$hwid" ]; then
- mac=$(cat /sys/class/net/eth0/address 2>/dev/null || cat /sys/class/net/br-lan/address 2>/dev/null || :)
- model=$(cat /tmp/sysinfo/model 2>/dev/null || printf 'OpenWrt Router')
- hash=$(printf '%s' "$mac-$model" | md5sum | cut -c1-16)
- hwid=$(printf '%s' "$hash" | sed 's/\(....\)\(....\)\(....\)\(....\)/\1-\2-\3-\4/')
-fi
+# Let Forkop identify the installed core so the provider returns its compatible
+# subscription template, rather than the Happ app's template.
+defaults=$(/usr/bin/forkop get_subscription_default_headers 2>/dev/null) || fail 'Не удалось получить заголовки Forkop. Обновите Forkop и повторите импорт.'
+headers=$(jsonfilter -s "$defaults" -e '@[*]' 2>/dev/null) || fail 'Forkop вернул некорректные заголовки.'
+[ -n "$headers" ] || fail 'Forkop вернул пустой список заголовков.'
 # Do not forward decoder diagnostics: they may contain credentials.
 url=$(/usr/bin/hpwnr "$link" 2>/dev/null) || fail 'Не удалось расшифровать ссылку. Возможно, нужны новые ключи hpwnr.'
 case "$url" in https://?*) ;; *) fail 'После расшифровки не получен HTTPS-адрес подписки.' ;; esac
@@ -46,7 +45,7 @@ id=happ_bridge
 existing=$(u -q get "forkop.$id" || :)
 if [ -n "$existing" ]; then
  [ "$existing" = subscription_url ] && [ "$(u -q get "forkop.$id.happ_bridge_managed")" = 1 ] || fail 'Имя happ_bridge занято другой настройкой.'
- u delete "forkop.$id"
+ # Keep filters, overrides and the download route configured by the user.
 fi
 u set "forkop.$id=subscription_url"
 u set "forkop.$id.section=$owner"
@@ -55,7 +54,13 @@ u set "forkop.$id.tag=Happ"
 u set "forkop.$id.happ_bridge_managed=1"
 u set "forkop.$id.subscription_update_enabled=1"
 u set "forkop.$id.subscription_update_interval=$interval"
-u add_list "forkop.$id.header=User-Agent: Happ/4.6.0"
+u -q delete "forkop.$id.header" 2>/dev/null || :
+printf '%s\n' "$headers" | while IFS= read -r header; do
+ case "$header" in
+  X-HWID:*) [ -z "$hwid" ] || continue ;;
+ esac
+ u add_list "forkop.$id.header=$header"
+done
 [ -z "$hwid" ] || u add_list "forkop.$id.header=X-HWID: $hwid"
 u commit forkop
 [ "$before" = "$(sha256sum /etc/config/forkop)" ] && [ -z "$(uci changes forkop)" ] || fail 'Настройки Forkop изменились во время импорта. Повторите.'
@@ -69,4 +74,4 @@ if ! /etc/init.d/forkop reload >/dev/null 2>&1; then
  printf '%s\n' 'Подписка записана, но Forkop не смог применить настройки. Проверьте диагностику Forkop.'
  exit 2
 fi
-printf '%s\n' 'Подписка добавлена. Автообновление включено. Проверьте серверы в Forkop.'
+printf '%s\n' 'Настройки подписки записаны, запрос на применение отправлен. Автообновление включено. Загрузка подписки и доступность серверов ещё не подтверждены: проверьте Дашборд и Логи Forkop.'
