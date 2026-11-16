@@ -1,6 +1,7 @@
 """Exercise the real shell importer with isolated paths and fake OpenWrt tools."""
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -68,8 +69,7 @@ class ImportTests(unittest.TestCase):
                 path.write_text(content)
                 path.chmod(0o700)
             script = (SOURCE/'root/usr/libexec/happ-forkop').read_text()
-            for prefix in ['/usr/bin/', '/etc/', '/var/lock/', '/tmp/']:
-                script = script.replace(prefix, str(root)+prefix)
+            script = re.sub(r'/(?:usr/bin|etc|var/lock|tmp)/', lambda match: str(root)+match.group(), script)
             importer = root/'import.sh'
             importer.write_text(script)
             env = dict(os.environ, TEST_ROOT=str(root), PATH=str(root/'bin')+os.pathsep+os.environ['PATH'])
@@ -100,6 +100,7 @@ class ImportTests(unittest.TestCase):
     def test_header_failure_leaves_configuration_unchanged(self):
         result, before, after = self.run_import(existing=True, defaults_fail=True)
         self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Не удалось получить заголовки Forkop', result.stdout)
         self.assertEqual(before, after)
 
 
