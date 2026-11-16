@@ -14,6 +14,12 @@ wget -O /tmp/happ-forkop-install.sh https://raw.githubusercontent.com/future-use
 
 После установки выйдите из LuCI и войдите снова: **Службы → Happ → Forkop**. Выберите секцию Forkop с действием «Подключение», вставьте ссылку, укажите режим и интервал. Нажмите **Добавить / обновить в Forkop**. Повторная установка сохраняет настройки и существующую подписку.
 
+Для установки версии из ветки или конкретного коммита скачайте её bootstrap.sh и задайте тот же ref через переменную окружения:
+
+```sh
+wget -O /tmp/happ-forkop-install.sh https://raw.githubusercontent.com/future-username/happ-forkop/fix/subscription-headers-and-reimport/bootstrap.sh && HAPP_FORKOP_REF=fix/subscription-headers-and-reimport sh /tmp/happ-forkop-install.sh
+```
+
 ## Режимы загрузки
 
 | Режим | Кто загружает подписку | Обновление | Когда использовать |

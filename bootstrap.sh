@@ -8,11 +8,14 @@ umask 077
 for tool in wget tar; do
  command -v "$tool" >/dev/null || { echo "Не установлен $tool"; exit 1; }
 done
+ref=${HAPP_FORKOP_REF:-main}
+case "$ref" in ''|*[!a-zA-Z0-9_./-]*) echo 'Некорректная версия дополнения.'; exit 1 ;; esac
 tmp=$(mktemp -d /tmp/happ-download.XXXXXX)
 trap 'rm -rf "$tmp"' EXIT
 trap 'exit 1' HUP INT TERM
 echo 'Скачивание Happ → Forkop...'
-wget -O "$tmp/package.tar.gz" 'https://codeload.github.com/future-username/happ-forkop/tar.gz/refs/heads/main'
-tar -xzf "$tmp/package.tar.gz" -C "$tmp"
-[ -f "$tmp/happ-forkop-main/install.sh" ] || { echo 'В архиве нет установщика.'; exit 1; }
-sh "$tmp/happ-forkop-main/install.sh"
+wget -O "$tmp/package.tar.gz" "https://codeload.github.com/future-username/happ-forkop/tar.gz/$ref"
+mkdir "$tmp/package"
+tar -xzf "$tmp/package.tar.gz" --strip-components=1 -C "$tmp/package"
+[ -f "$tmp/package/install.sh" ] || { echo 'В архиве нет установщика.'; exit 1; }
+sh "$tmp/package/install.sh"

@@ -40,7 +40,7 @@ class InstallerTests(unittest.TestCase):
             shutil.copytree(SOURCE/'root', root/'root')
             script = (SOURCE/'install.sh').read_text()
             script = script.replace(PINNED_X64, '0'*64 if bad_hash else digest)
-            script = re.sub(r'/(?:etc|www|usr|tmp)/', lambda match: str(root)+match.group(), script)
+            script = re.sub(r'(?<![A-Za-z0-9_.])/(?:etc|www|usr|tmp)/', lambda match: str(root)+match.group(), script)
             path = root/'install.sh'
             path.write_text(script)
             env = dict(os.environ, TEST_ROOT=str(root), PATH=str(root/'bin')+os.pathsep+os.environ['PATH'])

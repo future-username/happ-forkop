@@ -13,6 +13,33 @@ BINARY = os.environ.get('HPWNR_BINARY')
 
 @unittest.skipUnless(BINARY, 'Set HPWNR_BINARY to test the actual release')
 class ReleaseTests(unittest.TestCase):
+    def test_encrypt_tag_response_is_decrypted(self):
+        # AES-128-GCM fixture for the public key01/IV in hpwnr v1.0.3.
+        body = b'rGH1vLxpD1RJQ++rzGm3y4E0v+lDQ2mlnKgUAKGEA31MQIOUobGDItCsNZ8itvmmQUQukKTT5h4pZCj1/TGccydQLim83h17HPQSzFR1vuYuRGSrhsoCOxVCroq+e2kzgshPKg=='
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header('Encrypt-Tag', 'RtNR1dSaDG6bgopq6/6cNw==')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *_):
+                pass
+
+        with http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler) as server:
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                result = subprocess.run([BINARY, 'http://127.0.0.1:'+str(server.server_port)+'/sub?key=key01', 'fetch', 'sb', 'uri', 'stdout'], text=True, capture_output=True, timeout=20)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertTrue(result.stdout.startswith('vless://00000000-0000-4000-8000-000000000001@'), result.stdout)
+                self.assertIn('example.com:443', result.stdout)
+            finally:
+                server.shutdown()
+                thread.join()
+
     def test_crypt5_roundtrip(self):
         url = 'https://example.com/sub?key=key01&test=1'
         encrypted = subprocess.check_output([BINARY, url], text=True).strip()
