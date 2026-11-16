@@ -2,23 +2,27 @@
 set -eu
 umask 077
 cd "$(dirname "$0")"
+[ "$(id -u)" = 0 ] || { echo 'Запускайте от root.'; exit 1; }
 [ -f /etc/openwrt_release ] || { echo 'Запускайте на OpenWrt.'; exit 1; }
 [ -f /www/luci-static/resources/view/forkop/main.js ] || { echo 'Сначала установите Forkop с LuCI.'; exit 1; }
 [ "$(uci -q get forkop.settings.config_version)" = 2.0.0 ] || { echo 'Нужен Forkop с форматом настроек 2.0.0.'; exit 1; }
 for tool in jsonfilter wget sha256sum; do
  command -v "$tool" >/dev/null || { echo "Не установлен $tool"; exit 1; }
 done
+version=v1.0.3
 case "$(uname -m)" in
- aarch64) asset=linux-arm64; hash=8fc7465643c79e4ef9c69f3ddd7d43b30356ea05fa319b6d0e5449e186c0351a ;;
- x86_64) asset=linux-x86_64; hash=b63b027dcc6d92b8609203184d9fcde6959685bc2b461808afe108eb29751daa ;;
- *) echo 'Эта сборка установщика поддерживает aarch64 и x86_64. Для другой архитектуры нужна отдельная сборка hpwnr.'; exit 1 ;;
+ aarch64|arm64) asset=linux-arm64; hash=70690e11184ab89ac117d5d1a11b40206c7ce633bff32860c18112f1a1dfcf06 ;;
+ x86_64) asset=linux-x86_64; hash=57e448bf9d2a3e6db09378943770f85006b0efb41ef7581e14f17e4eaf331486 ;;
+ *) echo 'Установщик поддерживает aarch64 и x86_64. Другим архитектурам нужна проверенная сборка hpwnr.'; exit 1 ;;
 esac
 tmp=$(mktemp -d /tmp/happ-install.XXXXXX)
 trap 'rm -rf "$tmp"' EXIT
-wget -O "$tmp/hpwnr" "https://github.com/Omegaplexx/hpwnr/releases/download/v1.0.2/hpwnr-$asset"
+trap 'exit 1' HUP INT TERM
+wget -O "$tmp/hpwnr" "https://github.com/Omegaplexx/hpwnr/releases/download/$version/hpwnr-$asset"
 printf '%s  %s\n' "$hash" "$tmp/hpwnr" | sha256sum -c -
 chmod 700 "$tmp/hpwnr"
-"$tmp/hpwnr" help >/dev/null
+"$tmp/hpwnr" help > "$tmp/help"
+grep -q 'hpwnr v1.0.3' "$tmp/help" && grep -q 'stdout' "$tmp/help" || { echo 'Нужна полная сборка hpwnr v1.0.3 с поддержкой загрузки.'; exit 1; }
 mkdir -p /etc/happ-forkop /usr/libexec /usr/share/luci/menu.d /usr/share/rpcd/acl.d
 chmod 700 /etc/happ-forkop
 cp "$tmp/hpwnr" /usr/bin/hpwnr
